@@ -45,6 +45,8 @@ NRSD_INIT_FINE_DELAY            = 3       ; Initial value for HBlank fine-tune d
 NRSD_INIT_SCROLL_X              = 0
 NRSD_SCAN_ACC_ADD               = 171     ; NTSC: 0.666 fractional cycles / scanline -> 256 * 0.333 ~= 171
 
+NRSD_NUM_TESTS                  = 4
+NRSD_NUM_BYTES_PER_TEST         = 4
 NRSD_NUM_TEST_BYTES             = 16
 
 NRSD_SYSTEM_UNKNOWN             = 0
@@ -73,6 +75,7 @@ NRSD_nmiAddr:                   .res 2
 NRSD_HBlankExecutePtr:          .res 2
 NRSD_scanlineDelayExecutePtr:   .res 2
 NRSD_detectedSystem:            .res 1                      ; Set once to either SYSTEM_NTSC or SYSTEM_PAL by system detection test
+NRSD_detectedPattern:           .res NRSD_NUM_TESTS
 NRSD_detectedPhase:             .res 1                      ; Set to either 0..3 to report reset phase, or $FF if unable to detect (continuously updated)
 NRSD_testOffset:                .res 1                      ; Fine-X to use for $2005
 NRSD_testOffsetCoarse:          .res 1                      ; Coarse-X to use for $2006 testing
@@ -101,7 +104,7 @@ NRSD_nmi:
     sta $2001
     lda #$90
     sta $2000
-    jsr NRSD_Write_testResultsToNameTable
+    jsr NRSD_WriteTestResultsToNameTable
     lda #0
     sta $2006
     sta $2006
@@ -109,7 +112,7 @@ NRSD_nmi:
     sta $2005
     lda NRSD_ScrollY
     sta $2005
-    jsr NRSD_Delay_366
+    jsr NRSD_Delay_290
     jsr end_nmi_sync
     lda NRSD_r2001
     sta $2001
@@ -126,7 +129,7 @@ NRSD_nmi:
 
     lda NRSD_ScrollX
     jsr NRSD_DoPPURegWrite
-    jsr NRSD_Delay_366
+    jsr NRSD_Delay_290
     lda $2002
     asl
     and #$80
@@ -149,6 +152,7 @@ NRSD_nmi:
     sta $2001
 
     jsr NRSD_UpdateTestResult
+    jsr NRSD_DetectPatterns
     jsr NRSD_DetectPhase
     jsr NRSD_UpdateASCII
 
@@ -770,205 +774,246 @@ NRSD_DetectSystem:
     sta NRSD_detectedSystem
     rts
 
+NRSD_DetectPattern:
+    @patternCount   = NRSD_tmp+1
+    @byteCount      = NRSD_tmp
+    sta @patternCount
+@patternLoop:
+    lda #NRSD_NUM_BYTES_PER_TEST
+    sta @byteCount
+    tya
+    pha
+@byteLoop:
+    lda NRSD_testPatterns,x
+    cmp NRSD_testResults,y
+    bne @misMatch
+    inx
+    iny
+    dec @byteCount
+    bne @byteLoop
+    pla
+    tay
+    ; Entire pattern matched. Decrement last increased index and return success
+    dex
+    dex
+    dex
+    dex
+    sec
+    rts
+
+@misMatch:
+    ; Pattern mismatch. Skip to next pattern
+    inx
+    iny
+    dec @byteCount
+    bne @misMatch
+    pla
+    tay
+    dec @patternCount
+    bne @patternLoop
+    ; No pattern matched
+    clc
+    rts
+
 ;
-; Detects phase by matching against specific pattern
+; Detects bit pattern for each test, assigning letters to them:
+;
+; 2005: ABCD
+; 2006: GH
+; CHRI: MN
+; SPON: STU
+;
+NRSD_DetectPatterns:
+    ldy #0
+@testLoop:
+    tya
+    pha
+    lda @patternInfo_patternsOffset,y
+    tax
+    lda @patternInfo_numPatterns,y
+    pha
+    tya
+    asl
+    asl
+    tay
+    pla
+    jsr NRSD_DetectPattern
+    pla
+    tay
+    lda #'?'
+    bcc :+
+    txa
+    sec
+    sbc @patternInfo_patternsOffset,y
+    lsr
+    lsr
+    clc
+    adc @patternInfo_baseChar,y
+:
+    sta NRSD_detectedPattern,y
+    iny
+    cpy #NRSD_NUM_TESTS
+    bne @testLoop
+    rts
+
+@patternInfo_baseChar:
+.byte 'A', 'G', 'M', 'S'
+@patternInfo_patternsOffset:
+.byte NRSD_testPattern_A-NRSD_testPatterns, NRSD_testPattern_G-NRSD_testPatterns, NRSD_testPattern_M-NRSD_testPatterns, NRSD_testPattern_S-NRSD_testPatterns
+@patternInfo_numPatterns:
+.byte 4, 2, 2, 3
+
+NRSD_testPatterns:
+;
+; *** 2005-test ***
+;
+NRSD_testPattern_A:
+.byte %01111111
+.byte %01011011
+.byte %01111111
+.byte %01011011
+NRSD_testPattern_B:
+.byte %01111111
+.byte %01011011
+.byte %01011011
+.byte %01001001
+NRSD_testPattern_C:
+.byte %01111111
+.byte %01111111
+.byte %01111111
+.byte %01011011
+NRSD_testPattern_D:
+.byte %01111111
+.byte %01011111
+.byte %01111111
+.byte %01011011
+;
+; *** 2006-test ***
+;
+NRSD_testPattern_G:
+.byte %10111001
+.byte %10010000
+.byte %10111001
+.byte %10010000
+NRSD_testPattern_H:
+.byte %10010000
+.byte %00000000
+.byte %10010000
+.byte %00000000
+;
+; *** CHRI-test ***
+;
+NRSD_testPattern_M:
+.byte %11110000
+.byte %11110100
+.byte %11110000
+.byte %11110100
+NRSD_testPattern_N:
+.byte %11110100
+.byte %11110110
+.byte %11110100
+.byte %11110110
+;
+; *** SPON-test ***
+;
+NRSD_testPattern_S:
+.byte %10111111
+.byte %10011111
+.byte %10111111
+.byte %10011111
+NRSD_testPattern_T:
+.byte %10011111
+.byte %00001111
+.byte %10011111
+.byte %00001111
+NRSD_testPattern_U:
+.byte %10011111
+.byte %00101111
+.byte %10011111
+.byte %00111111
+
+;
+; Detects phase by matching against specific patterns
 ;
 NRSD_DetectPhase:
-    ; Skip phase detection entirely if not running on NTSC
-    lda NRSD_detectedSystem
-    cmp #NRSD_SYSTEM_NTSC
-    beq :+
-    lda #$FF
-    sta NRSD_detectedPhase
-    rts
-:
-    ldx #NRSD_NUM_TEST_BYTES*8-1
-@testLoop:
-    ldy #NRSD_NUM_TEST_BYTES-1
-@subTestLoop:
-    lda @testResultsTable,x
-    cmp NRSD_testResults,y
+    ldx #0
+@patternLoop:
+    lda @testResultsTable+0,x
+    cmp NRSD_detectedPattern+0
     bne @noMatch
-    dex
-    dey
-    bpl @subTestLoop
-    ; Test finished with match - return
-    jmp @testMatched
-@noMatch:
+    lda @testResultsTable+1,x
+    cmp NRSD_detectedPattern+1
+    bne @noMatch
+    lda @testResultsTable+2,x
+    cmp NRSD_detectedPattern+2
+    bne @noMatch
+    lda @testResultsTable+3,x
+    cmp NRSD_detectedPattern+3
+    bne @noMatch
+    ; All 4 patterns matched - lookup phase
     txa
-    and #%1110000
+    lsr
+    lsr
     tax
-    dex
-    cpx #$FF
-    bne @testLoop
-    ; All tests finished without any match
-    lda #$FF
+    lda @phaseLookup,x
     sta NRSD_detectedPhase
     rts
-@testMatched:
+@noMatch:
     inx
-    txa
-    lsr
-    lsr
-    lsr
-    lsr
-    ;
-    tax
-    lda @TestToPhaseTranslate,x
+    inx
+    inx
+    inx
+    cpx #@testResultsTable_end-@testResultsTable
+    bne @patternLoop
+    ; No patterns matched - set phase as undetected
+    lda #$FF
     sta NRSD_detectedPhase
     rts
 
 @testResultsTable:
-@testResultsPhase0:     ; X
-.byte %01111111
-.byte %01011011
-.byte %01111111
-.byte %01011011
-.byte %10111001
-.byte %10010000
-.byte %10111001
-.byte %10010000
-.byte %11110000
-.byte %11110100
-.byte %11110000
-.byte %11110100
-.byte %10111111
-.byte %10011111
-.byte %10111111
-.byte %10011111
+@testPatterns0:     ; Phase0
+.byte 'A'
+.byte 'G'
+.byte 'M'
+.byte 'S'
+@testPatterns1:     ; Phase1
+.byte 'A'
+.byte 'G'
+.byte 'N'
+.byte 'S'
+@testPatterns2:     ; Phase2
+.byte 'B'
+.byte 'H'
+.byte 'N'
+.byte 'T'
+@testPatterns3:     ; Phase3
+.byte 'C'
+.byte 'G'
+.byte 'M'
+.byte 'U'
+@testPatterns4:     ; Phase3 alternate patterns
+.byte 'D'
+.byte 'G'
+.byte 'M'
+.byte 'U'
+@testPatterns5:     ; Phase1 alternate patterns
+.byte 'B'
+.byte 'G'
+.byte 'N'
+.byte 'S'
+@testPatterns6:     ; Phase3 alternate patterns
+.byte 'C'
+.byte 'G'
+.byte 'M'
+.byte 'S'
+@testPatterns7:     ; Phase3 alternate patterns
+.byte 'D'
+.byte 'G'
+.byte 'M'
+.byte 'S'
+@testResultsTable_end:
 
-@testResultsPhase1:     ; Y
-.byte %01111111
-.byte %01011011
-.byte %01111111
-.byte %01011011
-.byte %10111001
-.byte %10010000
-.byte %10111001
-.byte %10010000
-.byte %11110100
-.byte %11110110
-.byte %11110100
-.byte %11110110
-.byte %10111111
-.byte %10011111
-.byte %10111111
-.byte %10011111
-
-@testResultsPhase2:     ; Z
-.byte %01111111
-.byte %01011011
-.byte %01011011
-.byte %01001001
-.byte %10010000
-.byte %00000000
-.byte %10010000
-.byte %00000000
-.byte %11110100
-.byte %11110110
-.byte %11110100
-.byte %11110110
-.byte %10011111
-.byte %00001111
-.byte %10011111
-.byte %00001111
-
-@testResultsPhase3:     ; W
-.byte %01111111
-.byte %01111111
-.byte %01111111
-.byte %01011011
-.byte %10111001
-.byte %10010000
-.byte %10111001
-.byte %10010000
-.byte %11110000
-.byte %11110100
-.byte %11110000
-.byte %11110100
-.byte %10011111
-.byte %00101111
-.byte %10011111
-.byte %00111111
-
-@testResultsPhase4:     ; W-alt
-.byte %01111111
-.byte %01011111
-.byte %01111111
-.byte %01011011
-.byte %10111001
-.byte %10010000
-.byte %10111001
-.byte %10010000
-.byte %11110000
-.byte %11110100
-.byte %11110000
-.byte %11110100
-.byte %10011111
-.byte %00101111
-.byte %10011111
-.byte %00111111
-
-@testResultsPhase5:     ; Y-alt
-.byte %01111111
-.byte %01011011
-.byte %01011011
-.byte %01001001
-.byte %10111001
-.byte %10010000
-.byte %10111001
-.byte %10010000
-.byte %11110100
-.byte %11110110
-.byte %11110100
-.byte %11110110
-.byte %10111111
-.byte %10011111
-.byte %10111111
-.byte %10011111
-
-@testResultsPhase6:     ; W-clash-with-X
-.byte %01111111
-.byte %01111111
-.byte %01111111
-.byte %01011011
-.byte %10111001
-.byte %10010000
-.byte %10111001
-.byte %10010000
-.byte %11110000
-.byte %11110100
-.byte %11110000
-.byte %11110100
-.byte %10111111
-.byte %10011111
-.byte %10111111
-.byte %10011111
-
-@testResultsPhase7:     ; W-alt-clash-with-X
-.byte %01111111
-.byte %01011111
-.byte %01111111
-.byte %01011011
-.byte %10111001
-.byte %10010000
-.byte %10111001
-.byte %10010000
-.byte %11110000
-.byte %11110100
-.byte %11110000
-.byte %11110100
-.byte %10111111
-.byte %10011111
-.byte %10111111
-.byte %10011111
-
-; Dummy
-;.repeat NUM_TEST_BYTES*2
-;.byte %11111111
-;.endrep
-
-@TestToPhaseTranslate:
+@phaseLookup:
 .byte 0, 1, 2, 3, 3, 1, 3, 3
 
 ;
@@ -976,7 +1021,7 @@ NRSD_DetectPhase:
 ;
 ; (takes 615 cycles)
 ;
-NRSD_Write_testResultsToNameTable:
+NRSD_WriteTestResultsToNameTable:
     ; Write system name
     lda #>($2000 + 32 * NRSD_TEXT_SYSTEM_Y + NRSD_TEXT_SYSTEM_X)
     sta $2006
@@ -1003,6 +1048,15 @@ NRSD_Write_testResultsToNameTable:
     lda NRSD_testResultsASCII+8*I+J
     sta $2007
 .endrep
+.endrep
+    ; Write detected patterns
+.repeat NRSD_NUM_TESTS, I
+    lda #>($2000 + 32 * (NRSD_TEXT_TESTS_Y + NRSD_NUM_BYTES_PER_TEST*I + 1) + NRSD_TEXT_TESTS_X + 10)
+    sta $2006
+    lda #<($2000 + 32 * (NRSD_TEXT_TESTS_Y + NRSD_NUM_BYTES_PER_TEST*I + 1) + NRSD_TEXT_TESTS_X + 10)
+    sta $2006
+    lda NRSD_detectedPattern+I
+    sta $2007
 .endrep
     rts
 
@@ -1036,11 +1090,13 @@ NRSD_Delay_110:
     rts
 
 ;
-; Delay for 366 cycles (including JSR and RTS)
+; Delay for 290 cycles (including JSR and RTS)
 ;
-NRSD_Delay_366:
+NRSD_Delay_290:
     ldx $00
-    ldx #70
+    nop
+    nop
+    ldx #54
 :
     dex
     bne :-
