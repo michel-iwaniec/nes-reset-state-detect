@@ -861,7 +861,7 @@ NRSD_DetectPatterns:
 @patternInfo_patternsOffset:
 .byte NRSD_testPattern_A-NRSD_testPatterns, NRSD_testPattern_G-NRSD_testPatterns, NRSD_testPattern_M-NRSD_testPatterns, NRSD_testPattern_S-NRSD_testPatterns
 @patternInfo_numPatterns:
-.byte 4, 2, 2, 3
+.byte 5, 2, 2, 3
 
 NRSD_testPatterns:
 ;
@@ -887,6 +887,11 @@ NRSD_testPattern_D:
 .byte %01011111
 .byte %01111111
 .byte %01011011
+NRSD_testPattern_E:
+.byte %01111111
+.byte %01011011
+.byte %01011111
+.byte %01011001
 ;
 ; *** 2006-test ***
 ;
@@ -1011,10 +1016,15 @@ NRSD_DetectPhase:
 .byte 'G'
 .byte 'M'
 .byte 'S'
+@testPatterns8:     ; Phase1(?) alternate patterns
+.byte 'E'
+.byte 'G'
+.byte 'N'
+.byte 'S'
 @testResultsTable_end:
 
 @phaseLookup:
-.byte 0, 1, 2, 3, 3, 1, 3, 3
+.byte 0, 1, 2, 3, 3, 1, 3, 3, 1
 
 ;
 ; Writes the test results to fixed positions of nametable

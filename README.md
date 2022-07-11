@@ -77,7 +77,7 @@ The recognized bit patterns are identified using a letter notation which is prin
 
 Letter notation used for different tests:
 
-2005: ABCD
+2005: ABCDE
 2006: GH
 CHRI: MN
 SPON: STU
